@@ -1,0 +1,47 @@
+name: Deploy to AWS Lambda
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Passo 1: Checkout do código
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      # Passo 2: Configuração do Python
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.13'
+
+      # Passo 3: Set up do AWS SAM
+      - name: Set up AWS SAM
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+          token: ${{ env.GITHUB_TOKEN }}
+
+      # Passo 4: Configure AWS credentials
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Passo 5: Construir o aplicativo SAM
+      - name: Build SAM application
+        run: |
+          cd python && sam build
+
+      # Passo 6: Deploy do aplicativo SAM para o AWS
+      - name: Deploy SAM application
+        run: |
+          cd python && sam deploy --no-confirm-changeset --no-fail-on-empty-changeset --resolve-s3 --stack-name zarzur-admin-login-auth-lambda-python --capabilities CAPABILITY_IAM

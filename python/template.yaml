@@ -1,0 +1,285 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+
+Resources:
+  ## Cognito - START ##
+  # User Pool Cognito
+  ZarzurUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: zarzur-user-pool
+      AliasAttributes:
+        - email  # Permite que os usuários se autentiquem usando o e-mail
+      AutoVerifiedAttributes:
+        - email # Verifica automaticamente os e-mails dos usuários
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 6
+          RequireUppercase: false
+          RequireLowercase: false
+          RequireNumbers: false
+          RequireSymbols: false
+
+  # App Client for Cognito (SPA)
+  ZarzurAppClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: auth
+      UserPoolId: !Ref ZarzurUserPool
+      GenerateSecret: false
+      CallbackURLs:
+        - "https://www.example.com/callback"  # Add your callback URL he
+      SupportedIdentityProviders:
+        - COGNITO
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: ['code']
+      AllowedOAuthScopes:
+        - 'openid'
+        - 'profile'
+        - 'email'
+      ExplicitAuthFlows:
+        - ALLOW_USER_AUTH
+        - ALLOW_ADMIN_USER_PASSWORD_AUTH
+        - ALLOW_CUSTOM_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+  ## Cognito - END ##
+
+
+
+  ## API GATEWAY 1 - START ##
+  # API Gateway with Cognito Authorizer
+  AdminLoginApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: zarzur-admin-login-api-gateway
+      StageName: prod
+
+  # Cognito Authorizer for API Gateway
+  ZarzurCognitoAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: zarzur-admin-login-api-authorizer
+      RestApiId: !Ref AdminLoginApi
+      Type: COGNITO_USER_POOLS
+      ProviderARNs:
+        - !GetAtt ZarzurUserPool.Arn
+      IdentitySource: method.request.header.Authorization
+
+  # API Gateway Resource
+  ZarzurAdminLoginResource: # URL
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref AdminLoginApi
+      ParentId: !GetAtt AdminLoginApi.RootResourceId
+      PathPart: admin # Este é o primeiro nível: "/admin"
+
+  ZarzurAdminLoginResourceChild:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref AdminLoginApi
+      ParentId: !Ref ZarzurAdminLoginResource  # O "/admin" como o parent
+      PathPart: login  # Este é o segundo nível: "/login"
+
+  # API Gateway Method
+  ZarzurAdminLoginMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref ZarzurCognitoAuthorizer
+      HttpMethod: POST
+      ResourceId: !Ref ZarzurAdminLoginResourceChild
+      RestApiId: !Ref AdminLoginApi
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminLoginLambdaFunction.Arn}/invocations"
+  ## API GATEWAY 1 - END ##
+
+
+
+  ## API GATEWAY 2 - START ##
+  # API Gateway with Cognito Authorizer
+  AdminAuthApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: zarzur-admin-auth-api-gateway
+      StageName: prod
+  ## API GATEWAY 2 - END ##
+
+
+  ## API GATEWAY 3 - START ##
+  # API Gateway with Cognito Authorizer
+  CreateUserApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: zarzur-create-user-api-gateway
+      StageName: default
+  ## API GATEWAY 3 - END ##
+
+
+  ## API GATEWAY 4 - START ##
+  # API Gateway with Cognito Authorizer
+  DeployApiGatewayApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: zarzur-deploy-api-gateway-api-gateway
+      StageName: default
+  ## API GATEWAY 4 - END ##
+
+
+  ## Permissões entre API Gateway e Lambda ##
+  AdminLoginLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref AdminLoginLambdaFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${AdminLoginApi}/*/*/*
+
+
+  ## Functions
+  ## Auth
+  AdminAuthLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: AdminAuthLambdaFunction
+      Description: !Sub
+        - 'Stack ${AWS::StackName} Function ${ResourceName}'
+        - ResourceName: AdminAuthLambdaFunction
+      CodeUri: ./lambda_function/auth
+      Handler: lambda_function_auth.lambda_handler
+      Runtime: python3.13
+      Layers:
+        - arn:aws:lambda:us-east-1:336392948345:layer:AWSSDKPandas-Python313:1 # AWSSDKPandas-Python313 - Python 3.13
+      Architectures:
+        - x86_64
+      MemorySize: 128
+      Timeout: 15
+      Environment:
+        Variables:
+          CLIENT_ID: !Ref ZarzurAppClient
+      Events:
+        AdminAuthLambdaFunctionApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdminAuthApi
+            Method: post
+            Path: /auth
+      Role: !Sub arn:aws:iam::${AWS::AccountId}:role/LabRole
+
+
+  ## Login
+  AdminLoginLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: AdminLoginLambdaFunction
+      Description: !Sub
+        - 'Stack ${AWS::StackName} Function ${ResourceName}'
+        - ResourceName: AdminLoginLambdaFunction
+      CodeUri: ./lambda_function/login
+      Handler: lambda_function_login.lambda_handler
+      Runtime: python3.13
+      Layers:
+        - arn:aws:lambda:us-east-1:336392948345:layer:AWSSDKPandas-Python313:1 # AWSSDKPandas-Python313 - Python 3.13
+      Architectures:
+        - x86_64
+      MemorySize: 128
+      Timeout: 15
+      Environment:
+        Variables:
+          CLIENT_ID: !Ref ZarzurAppClient
+      Events:
+        AdminLoginLambdaFunctionApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdminLoginApi
+            Method: get
+            Path: /
+      Role: !Sub arn:aws:iam::${AWS::AccountId}:role/LabRole
+
+
+  ## Create admin users in Cognito User Pool
+  CreateUserLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: CreateUserLambdaFunction
+      Description: Lambda function to create a user in Cognito User Pool
+      CodeUri: ./lambda_function/create_admin_users
+      Handler: lambda_function_create_admin_users.lambda_handler
+      Runtime: python3.13
+      Layers:
+        - arn:aws:lambda:us-east-1:336392948345:layer:AWSSDKPandas-Python313:1 # AWSSDKPandas-Python313 - Python 3.13
+      Architectures:
+        - x86_64
+      MemorySize: 128
+      Timeout: 15
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref ZarzurUserPool
+          SECOND_API_GATEWAY_URL: !Sub "https://${DeployApiGatewayApi}.execute-api.${AWS::Region}.amazonaws.com/default/admin/configure/deploy-api-gateway"
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - apigateway:POST  # Permissão para invocar uma API Gateway via método POST
+              Resource: "*"
+      Events:
+        AdminAuthLambdaFunctionApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CreateUserApi
+            Method: get
+            Path: /admin/configure
+      Role: !Sub arn:aws:iam::${AWS::AccountId}:role/LabRole
+
+
+  # Função Lambda para deploy do stage 'prod' da API Gateway
+  DeployApiGatewayLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: DeployApiGatewayLambda
+      Description: Lambda function to deploy some API Gateway
+      CodeUri: ./lambda_function/deploy_api_gateway
+      Handler: lambda_function_deploy_api_gateway.lambda_handler
+      Runtime: python3.13
+      Layers:
+        - arn:aws:lambda:us-east-1:336392948345:layer:AWSSDKPandas-Python313:1 # AWSSDKPandas-Python313 - Python 3.13
+      Architectures:
+        - x86_64
+      MemorySize: 128
+      Timeout: 15
+      Environment:
+        Variables:
+          API_GATEWAY_ID: !Ref AdminLoginApi
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - apigateway:POST  # Permissão para criar o deploy
+              Resource: "*"
+      Events:
+        AdminAuthLambdaFunctionApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DeployApiGatewayApi
+            Method: get
+            Path: /admin/configure/deploy-api-gateway
+      Role: !Sub arn:aws:iam::${AWS::AccountId}:role/LabRole
+
+
+
+Outputs:
+  AdminAuthLambdaFunction:
+    Description: "API Gateway endpoint URL for Admin Login Auth Lambda Function"
+    Value: !Sub "https://${AdminAuthApi}.execute-api.${AWS::Region}.amazonaws.com/prod/auth/"
+  AdminLoginLambdaFunction:
+    Description: "API Gateway endpoint URL for Admin Login Lambda Function"
+    Value: !Sub "https://${AdminLoginApi}.execute-api.${AWS::Region}.amazonaws.com/prod/admin/login/"
+  CreateUserLambdaFunction:
+    Description: "ADMIN - URL for Admin Configure (Create users & Deploy API Gateway)"
+    Value: !Sub "https://${CreateUserApi}.execute-api.${AWS::Region}.amazonaws.com/default/admin/configure"
+  DeployApiGatewayLambda:
+    Description: "ADMIN - URL for Admin Configure (Deploy API Gateway)"
+    Value: !Sub "https://${DeployApiGatewayApi}.execute-api.${AWS::Region}.amazonaws.com/default/admin/configure/deploy-api-gateway"

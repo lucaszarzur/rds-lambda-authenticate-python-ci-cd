@@ -50,4 +50,4 @@ sam deploy --guided
 sam delete
 ```
 
-Sim, apenas isso! :)
+Sim, apenas isso! :) 
